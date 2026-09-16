@@ -26,7 +26,7 @@ struct SharedConfiguration: Codable {
     }
 
     static func localDeviceID() -> String {
-        let key = "calibrationDeviceID"
+        let key = "deviceID"
         if let value = UserDefaults.standard.string(forKey: key), UUID(uuidString: value) != nil { return value }
         let value = UUID().uuidString
         UserDefaults.standard.set(value, forKey: key)

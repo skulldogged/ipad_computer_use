@@ -22,5 +22,13 @@
         <string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>
     </array>
     <key>NSLocalNetworkUsageDescription</key><string>Connect to your control server and the attached XIAO input tool.</string>
-    <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+    <key>NSAppTransportSecurity</key><dict>
+        <key>NSAllowsLocalNetworking</key><true/>
+        <key>NSExceptionDomains</key><dict>
+            <!-- Tailscale encrypts this private transport; iPadOS does not classify CGNAT as local. -->
+            <key>100.64.0.0/10</key><dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+        </dict>
+    </dict>
 </dict></plist>

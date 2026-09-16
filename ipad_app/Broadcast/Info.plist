@@ -20,7 +20,15 @@
         </dict>
     </dict>
     <key>RelayKeychainGroup</key><string>$(AppIdentifierPrefix)$(KEY_RELAY_BUNDLE_ID)</string>
-    <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+    <key>NSAppTransportSecurity</key><dict>
+        <key>NSAllowsLocalNetworking</key><true/>
+        <key>NSExceptionDomains</key><dict>
+            <!-- Match the app's private Tailscale transport exception. -->
+            <key>100.64.0.0/10</key><dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+        </dict>
+    </dict>
     <key>NSExtension</key><dict>
         <key>NSExtensionPointIdentifier</key><string>com.apple.broadcast-services-upload</string>
         <key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).SampleHandler</string>

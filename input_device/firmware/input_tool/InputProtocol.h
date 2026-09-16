@@ -17,9 +17,11 @@ inline bool validateInput(const InputRecord *records, size_t count) {
     const auto &r = records[i];
     if (r.type == 1) {
       if (!validKey(r.a, r.b) || r.c || r.d || lastButtons) return false;
-    } else if (r.type == 2) {
-      if (r.a > 7 || r.b == 128 || r.c == 128 || r.d == 128) return false;
-      lastButtons = r.a;
+    } else if (r.type >= 16 && r.type <= 23) {
+      if (r.b > 127 || r.d > 127) return false;
+      lastButtons = r.type & 7;
+    } else if (r.type == 24) {
+      if (lastButtons || r.a == 128 || r.b || r.c || r.d) return false;
     } else if (r.type == 3) {
       if (r.c || r.d || lastButtons) return false;
       waits += r.a | (uint32_t(r.b) << 8);

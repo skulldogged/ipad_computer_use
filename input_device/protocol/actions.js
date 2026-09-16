@@ -13,14 +13,10 @@ function encodeActions(actions) {
     if (!Number.isInteger(n) || Math.abs(n) > limit) throw Error(`Invalid ${name}`);
     return n;
   };
-  const move = (dx, dy, button = 0) => {
-    integer(dx, 4096, 'dx'); integer(dy, 4096, 'dy');
-    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 127));
-    let x = 0, y = 0;
-    for (let i = 1; i <= steps; i++) {
-      const nx = Math.round(dx * i / steps), ny = Math.round(dy * i / steps);
-      add(2, button, nx - x, ny - y, 0); x = nx; y = ny;
-    }
+  const absolute = (x, y, button = 0) => {
+    integer(x, 32767, 'absolute x'); integer(y, 32767, 'absolute y');
+    if (x < 0 || y < 0) throw Error('Absolute coordinates must be 0 to 32767');
+    add(16 | button, x & 255, x >> 8, y & 255, y >> 8);
   };
   for (const action of actions) {
     if (!action || typeof action !== 'object') throw Error('Invalid action');
@@ -31,16 +27,31 @@ function encodeActions(actions) {
       for (let i = 0; i < bytes.length; i += 2) add(1, bytes[i], bytes[i + 1], 0, 0);
       break;
     }
-    case 'move': move(action.dx, action.dy); break;
-    case 'click':
+    case 'move': absolute(action.x, action.y); break;
+    case 'click': {
+      const button = buttons[action.button ?? 'left'];
+      if (!button) throw Error('button must be left, right, or middle');
+      absolute(action.x, action.y);
+      absolute(action.x, action.y, button);
+      absolute(action.x, action.y); break;
+    }
     case 'drag': {
       const button = buttons[action.button ?? 'left'];
       if (!button) throw Error('button must be left, right, or middle');
-      add(2, button, 0, 0, 0);
-      if (action.type === 'drag') move(action.dx, action.dy, button);
-      add(2, 0, 0, 0, 0); break;
+      const {from, to} = action;
+      if (!from || !to) throw Error('Absolute drag needs from and to');
+      // Validate both endpoints before interpolation; retain the button across every report.
+      for (const p of [from, to]) {
+        integer(p.x, 32767, 'absolute x'); integer(p.y, 32767, 'absolute y');
+        if (p.x < 0 || p.y < 0) throw Error('Absolute coordinates must be 0 to 32767');
+      }
+      absolute(from.x, from.y);
+      absolute(from.x, from.y, button);
+      const steps = Math.max(1, Math.ceil(Math.hypot(to.x-from.x, to.y-from.y) / 1024));
+      for (let i=1; i<=steps; i++) absolute(Math.round(from.x+(to.x-from.x)*i/steps), Math.round(from.y+(to.y-from.y)*i/steps), button);
+      absolute(to.x, to.y); break;
     }
-    case 'scroll': add(2, 0, 0, 0, integer(action.wheel, 127, 'wheel')); break;
+    case 'scroll': add(24, integer(action.wheel, 127, 'wheel'), 0, 0, 0); break;
     case 'wait': {
       const ms = integer(action.ms, 10000, 'wait');
       if (ms < 0 || (waitTotal += ms) > 10000) throw Error('Total waits must be 0 to 10,000 ms');

@@ -35,6 +35,7 @@ struct DongleStatus: Decodable {
     let running: Bool
     let state: String
     let hidReady: Bool
+    let absolutePointer: Bool
 }
 
 actor DongleClient {

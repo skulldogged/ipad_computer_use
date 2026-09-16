@@ -25,7 +25,7 @@ This is developer tooling, not a hardened public remote-control service.
   unconfirmed. Live Activity dismissal alone does not stop input.
 - Screenshots can contain sensitive data. The CLI writes them to the private
   state directory until you remove them. Server logs, measurement traces, and
-  calibration profiles are also local runtime data, not release fixtures.
+  device runtime data is local, not a release fixture.
 - The MCP adapter is no-auth by design for private tunnel prototyping and binds
   to `127.0.0.1` by default. If a Tailscale-native agent needs direct access,
   bind it to the Tailscale IP with `MCP_ALLOW_TAILNET=1` and rely on Tailnet

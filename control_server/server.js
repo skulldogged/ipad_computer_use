@@ -5,7 +5,7 @@ const os = require('node:os');
 const {WebSocketServer, WebSocket} = require('ws');
 const {encodeActions} = require('ipad_input_device/actions');
 const {readInputDeviceSecret} = require('./config');
-const {CalibrationStore, validID} = require('./calibration/store');
+const {validID} = require('./config');
 const {compileHighLevelActions} = require('./high_level_actions');
 const {Sessions} = require('./sessions');
 const {createLiveActivities} = require('./live_activity');
@@ -24,7 +24,7 @@ async function readJSON(request) {
   }
   return JSON.parse(Buffer.concat(parts).toString());
 }
-function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeoutMs = 85000, heartbeatMs = 5000, screenshotTimeoutMs = 8000, calibration = new CalibrationStore(), requireSession = true, liveActivities = createLiveActivities()} = {}) {
+function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeoutMs = 85000, heartbeatMs = 5000, screenshotTimeoutMs = 8000, requireSession = true, liveActivities = createLiveActivities()} = {}) {
   const sessions = new Sessions();
   let device = null, pending = null, screenPending = null;
   const sockets = new WebSocketServer({noServer: true, maxPayload: 3 * 1024 * 1024, perMessageDeflate: false});
@@ -87,10 +87,8 @@ function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeou
       }
       if (!validID(statusID)) {json(response, 400, {error: 'Invalid device identity'}); return;}
       const connected = !!device?.ready && device.deviceID?.toLowerCase() === statusID.toLowerCase();
-      const lease = calibration.lease();
       const session = sessions.forDevice(statusID);
-      json(response, 200, {connected, pointerCalibrated: calibration.ready(statusID),
-        calibrating: lease?.deviceID?.toLowerCase() === statusID.toLowerCase(),
+      json(response, 200, {connected,
         screenBroadcast: connected && device.capabilities.includes('screen'),
         ...(requireSession ? {sessionID: session?.id || null, sessionState: session?.state || 'idle',
           sendingInput: connected && !!pending, liveActivityUpdating: connected ? device.liveActivityUpdating ?? null : null,
@@ -103,7 +101,7 @@ function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeou
     }
     if (request.method === 'GET' && request.url === '/status') {
       json(response, 200, {connected: !!device?.ready, device: device?.name || null, capabilities: device?.capabilities || [],
-        deviceID: device?.deviceID || null, pointerCalibrated: calibration.ready(device?.deviceID), calibrating: !!calibration.lease(),
+        deviceID: device?.deviceID || null, absolutePointer: !!device?.absolutePointer,
         pending: pending ? {id: pending.id, phase: pending.phase} : null}); return;
     }
     if (request.method === 'GET' && request.url === '/screen') {
@@ -129,21 +127,15 @@ function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeou
       const textRun = request.url === '/run';
       if (textRun && typeof body.sequence !== 'string') throw Error('sequence must be text');
       if (computerUse && !device?.ready) {json(response, 503, {error: 'iPad is not connected'}); return;}
-      const profile = typeof calibration.profile === 'function' ? calibration.profile(device?.deviceID) : null;
       const delay = body.delay ?? (textRun ? 1 : 0);
       if (!Number.isInteger(delay) || delay < 0 || delay > 10) throw Error('Invalid delay');
-      const actions = computerUse ? compileHighLevelActions(body, profile) : (textRun ? [{type: 'keys', sequence: body.sequence}] : body.actions);
+      const actions = computerUse ? compileHighLevelActions(body) : (textRun ? [{type: 'keys', sequence: body.sequence}] : body.actions);
       const actionsWithDelay = delay ? [{type: 'wait', ms: delay * 1000}, ...actions] : actions;
       const hex = encodeActions(actionsWithDelay);
       if (!device?.ready) {json(response, 503, {error: 'iPad is not connected'}); return;}
       if (!device.capabilities.includes('input')) {json(response, 409, {error: 'Update the iPad app before sending input'}); return;}
-      const permit = calibration.permits(device.deviceID, request.headers['x-calibration-run']);
-      if (calibration.lease() && !permit) {
-        json(response, 409, {code: 'calibration_in_progress', error: 'Calibration is running. Stop it before issuing other input.'}); return;
-      }
-      const pointerAction = actionsWithDelay.some(a => ['move', 'click', 'drag', 'scroll'].includes(a.type));
-      if (pointerAction && !permit && !calibration.ready(device.deviceID)) {
-        json(response, 428, {code: 'calibration_required', error: 'Complete pointer calibration in the iPad app before issuing pointer actions.'}); return;
+      if (actions.some(a => ['move','click','drag','scroll'].includes(a.type)) && !device.absolutePointer) {
+        json(response, 409, {error: 'Absolute pointer firmware required'}); return;
       }
       if (pending) {json(response, 409, {error: 'A sequence is already running'}); return;}
       const id = crypto.randomUUID();
@@ -156,9 +148,6 @@ function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeou
       liveActivities.update(target.session, true);
       target.send(JSON.stringify({type: 'run', id, hex}));
     } catch (error) {
-      if (error.message === 'Pointer calibration profile required') {
-        json(response, 428, {code: 'calibration_required', error: 'Complete pointer calibration in the iPad app before issuing pointer actions.'}); return;
-      }
       json(response, 400, {error: error.message});
     }
   });
@@ -195,6 +184,7 @@ function createRelay({inputDeviceSecret = readInputDeviceSecret(), commandTimeou
         ws.name = typeof message.name === 'string' ? message.name.slice(0, 80) : 'iPad';
         ws.deviceID = validID(message.deviceID) ? message.deviceID : null;
         ws.capabilities = Array.isArray(message.capabilities) ? message.capabilities.filter(c => ['screen', 'input'].includes(c)) : [];
+        ws.absolutePointer = message.absolutePointer === true;
         clearTimeout(handshake);
         ws.send(JSON.stringify({type: 'ready', inputDeviceSecret})); return;
       }

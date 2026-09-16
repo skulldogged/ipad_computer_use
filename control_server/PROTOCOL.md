@@ -1,110 +1,39 @@
-# Control server protocol
+# Control protocol
 
-There is no app-layer pairing password. Browser Origin requests are rejected.
-Administrative routes below additionally require a loopback source; do not expose
-them through a public reverse proxy. Run app-facing routes only on a trusted
-network or behind a private transport such as Tailscale.
+POST /session/start accepts {deviceID} and returns {sessionID,state}.
+POST /session/end accepts {deviceID,sessionID}. GET /device-status/UUID reports
+connection and session state. The app connects to WS /device and sends hello with
+name, deviceID, sessionID, capabilities:["input","screen"], absolutePointer:true.
+The server replies ready with the inputDeviceSecret. A session permit is single-use,
+device-bound, expires after 120 seconds, and requires user-started broadcasting.
 
-## App lifecycle (remote app access)
+## Loopback controller routes
+- GET /status: connection, capabilities, absolutePointer and pending command.
+- GET /screen: fresh JPEG, dimensions, frameID and timestamps.
+- POST /computer-use/actions: screenshot-coordinate actions.
+- POST /actions: low-level HID-coordinate actions.
+- POST /run: {sequence:"hello{ENTER}",delay:1}.
+- POST /stop: cancel pending input.
 
-| Route | Body / result |
-| --- | --- |
-| `POST /session/start` | `{deviceID}` -> `{sessionID, state:"starting"}` |
-| `POST /session/end` | `{deviceID, sessionID}` -> `{state}`; 202 indicates requested, not necessarily stopped |
-| `GET /device-status/<deviceID>` | Connection, calibration, session state, input activity, Live Activity update status |
-| `WS /device` | One iPad connection with a valid session permit |
+Example computer-use request:
 
-IDs are UUIDs. A new session permit is device-bound, single-use, and expires
-after 120 seconds. The iPad must send:
+    {"coordinateSpace":{"width":1280,"height":890},"actions":[{"type":"click","x":500,"y":300}]}
 
-```json
-{"type":"hello","name":"iPad Session","deviceID":"UUID","sessionID":"UUID","capabilities":["input","screen"]}
-```
+Actions: type_text with text; press with keys:{key,modifiers}; move_to and click
+with x,y; drag with from:{x,y},to:{x,y}; scroll with dy; wait with ms.
+Button is left (default), right or middle. Chord modifiers: ctrl,shift,alt,cmd.
+Coordinate dimensions describe the full display, in screen_pixels (default) or
+ui_points. Positions map directly to 0..32767; no current-pointer argument is used.
 
-The server returns `{"type":"ready","inputDeviceSecret":"..."}` after accepting
-the session. The app uses that secret for mutating requests to the attached
-input device; the input device does not publish the secret from `/status`.
+Low-level actions use keys with sequence; move/click with x,y in 0..32767; drag
+with from/to in that range; scroll with wheel; wait with ms. Scroll is performed
+at the last absolute position. Delays are encoded as wait records.
 
-## Controller API (loopback only)
+At most 128 actions/512 records and 10 seconds total waits per batch. Batches
+release their buttons. One input request and one screenshot may be pending.
+App sends accepted then completed/failed with the command ID. Completion confirms
+report delivery; inspect the screenshot to verify the intended app effect.
+Do not replay unknown outcomes after timeout/disconnection automatically.
 
-| Route | Body / result |
-| --- | --- |
-| `GET /status` | Connected device, capabilities, calibration, pending command |
-| `GET /screen` | Fresh JPEG as base64, frameID, dimensions, timestamps, orientation |
-| `POST /computer-use/actions` | High-level screenshot-coordinate input for MCP/agent callers |
-| `POST /run` | `{sequence:"hello{ENTER}", delay:1}` |
-| `POST /actions` | Low-level structured input for diagnostics and calibration |
-| `POST /stop` | Cancel pending input; does not end the session |
-
-Computer-use action variants:
-
-```json
-{
-  "coordinateSpace": {"width": 1280, "height": 960, "units": "screen_pixels"},
-  "pointer": {"x": 400, "y": 300},
-  "actions": [
-    {"type": "type_text", "text": "hello"},
-    {"type": "press", "keys": {"modifiers": ["cmd"], "key": "space"}},
-    {"type": "click", "x": 500, "y": 300, "button": "left"},
-    {"type": "move_to", "x": 600, "y": 360},
-    {"type": "drag", "from": {"x": 600, "y": 360}, "to": {"x": 800, "y": 360}},
-    {"type": "scroll", "dy": -3},
-    {"type": "wait", "ms": 250}
-  ],
-  "delay": 0
-}
-```
-
-`coordinateSpace` defaults to screenshot pixels when coordinates are present;
-`units:"ui_points"` may be used by native callers. Coordinate actions compile
-through the saved calibration profile. `move_to` and coordinate `click` need a
-known pointer origin, supplied by top-level `pointer` or earlier actions in the
-same request. The server does not observe the pointer location in arbitrary apps.
-
-Low-level structured action variants:
-
-```json
-[
-  {"type":"keys","sequence":"abc"},
-  {"type":"move","dx":10,"dy":-5},
-  {"type":"click","button":"left"},
-  {"type":"drag","dx":30,"dy":0,"button":"left"},
-  {"type":"scroll","wheel":3},
-  {"type":"wait","ms":250}
-]
-```
-
-Top-level `delay` is controller convenience only; the server compiles it into
-an initial wait record before sending input records to the iPad. The input
-device protocol itself has no batch delay field.
-
-At most one input request and one screenshot request may be pending. They can
-run independently. Pointer input before calibration returns 428 with
-`code: calibration_required`. Other input during calibration returns 409 with
-`code: calibration_in_progress`. An internal device-bound permit authorizes
-calibration test movements, not normal callers.
-
-## WebSocket messages
-
-- Server `ready`: `{type, inputDeviceSecret}` after session acceptance.
-- Server `run`: `{type, id, hex}`. Timing is encoded as wait records inside `hex`.
-- App replies `accepted`, then `completed` or `failed`, echoing `id`.
-- Server `screen`: `{type, id}`. App replies `screenshot` with id, MIME type,
-  base64 JPEG data, width, height, capturedAt (milliseconds), and frameID.
-- Server `stop`: cancel the current action.
-- Server `end-session`: revoke input, release keys/buttons, then close the session.
-- App `session-ended`: `{type, stopConfirmed:true|false}` after cleanup.
-- App `activity-status`: `{type, updating:true|false}` for Live Activity diagnostics.
-
-Session end immediately rejects new commands. The server allows 15 seconds for
-stop acknowledgment, then disconnects with an unconfirmed outcome. Timeouts,
-disconnects, and partial failures must never be automatically replayed. A `done`
-firmware/command result confirms report delivery, not the target app's effect.
-
-## Native calibration
-
-The second service accepts `WS /native` from the app on the same trusted
-transport. The app sends viewport, pointer, click, start, and stop messages; the
-service sends ready, target, ack, and run-progress messages. `/state` and
-`/target` are loopback-only worker APIs. No browser calibration endpoint or MCP
-calibration tool is included.
+Browser Origin requests are rejected. Administrative routes require loopback.
+Use a trusted network or private Tailscale transport for app-facing routes.

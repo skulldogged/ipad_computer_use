@@ -65,7 +65,16 @@ final class FrameCapture: @unchecked Sendable {
         let result: Result<ScreenShot, Error> = autoreleasepool {
             do {
                 guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw RelayError(message: "Missing video frame") }
-                var image = CIImage(cvPixelBuffer: buffer).oriented(orientation)
+                // ReplayKit's portrait-buffer landscape rotation needs the inverse
+                // quarter-turn when rendering pixels with Core Image. Applying the
+                // attachment directly leaves landscape screenshots upside down.
+                let correction: CGImagePropertyOrientation
+                switch orientation {
+                case .right: correction = .left
+                case .left: correction = .right
+                default: correction = orientation
+                }
+                var image = CIImage(cvPixelBuffer: buffer).oriented(correction)
                 let scale = min(1, 1280 / max(image.extent.width, image.extent.height))
                 image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
                 guard let cgImage = context.createCGImage(image, from: image.extent.integral,

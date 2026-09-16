@@ -1,6 +1,20 @@
 [
-  {"type": "move", "dx": 80, "dy": 0},
-  {"type": "click", "button": "left"},
-  {"type": "wait", "ms": 500},
-  {"type": "keys", "sequence": "hello{ENTER}"}
+  {
+    "type": "move",
+    "x": 16384,
+    "y": 16384
+  },
+  {
+    "type": "click",
+    "x": 16384,
+    "y": 16384
+  },
+  {
+    "type": "wait",
+    "ms": 500
+  },
+  {
+    "type": "keys",
+    "sequence": "hello{ENTER}"
+  }
 ]

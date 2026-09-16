@@ -1,5 +1,5 @@
 #include <Keyboard.h>
-#include <Mouse.h>
+#include <MouseAbsolute.h>
 #include <USB.h>
 #include <NCMEthernetlwIP.h>
 #include <WebServer.h>
@@ -8,6 +8,15 @@
 #include "Diagnostics.h"
 #include "InputProtocol.h"
 #include "OnboardLights.h"
+#if defined(ARDUINO_WAVESHARE_RP2040_ZERO)
+#include <Adafruit_NeoPixel.h>
+Adafruit_NeoPixel statusPixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+#define INPUT_TOOL_NAME "RP2040 Zero Input Tool"
+#elif defined(ARDUINO_SEEED_XIAO_RP2040)
+#define INPUT_TOOL_NAME "XIAO Input Tool"
+#else
+#error "Select a supported input-tool board: XIAO RP2040 or Waveshare RP2040 Zero."
+#endif
 #if __has_include("GeneratedSecret.h")
 #include "GeneratedSecret.h"
 #endif
@@ -16,14 +25,16 @@
 #error "GeneratedSecret.h missing. Build with input_device/scripts/build.sh so the input-device secret is generated and embedded."
 #endif
 
-class InputMouse : public Mouse_ {
+class InputAbsoluteMouse : public MouseAbsolute_ {
 public:
-  void report(uint8_t buttons, int8_t x = 0, int8_t y = 0, int8_t wheel = 0) {
+  int x = 16384, y = 16384;
+  void report(uint8_t buttons, int nextX, int nextY, int8_t wheel = 0) {
     _buttons = buttons;
+    x = nextX; y = nextY;
     move(x, y, wheel);
   }
 };
-InputMouse pointer;
+InputAbsoluteMouse absolutePointer;
 
 NCMEthernetlwIP ethernet;
 WebServer server(80);
@@ -43,10 +54,18 @@ void setLight(Light color) {
   static int previous = -1;
   if (previous == int(color)) return;
   previous = int(color);
-  // The onboard user LED channels are active-low; no NeoPixel driver is used.
+#if defined(ARDUINO_WAVESHARE_RP2040_ZERO)
+  statusPixel.setPixelColor(0,
+    color == Light::Red || color == Light::Yellow ? 16 : 0,
+    color == Light::Green || color == Light::Yellow || color == Light::Cyan ? 16 : 0,
+    color == Light::Blue || color == Light::Cyan ? 16 : 0);
+  statusPixel.show();
+#else
+  // The XIAO onboard user LED channels are active-low.
   digitalWrite(PIN_LED_R, color == Light::Red || color == Light::Yellow ? LOW : HIGH);
   digitalWrite(PIN_LED_G, color == Light::Green || color == Light::Yellow || color == Light::Cyan ? LOW : HIGH);
   digitalWrite(PIN_LED_B, color == Light::Blue || color == Light::Cyan ? LOW : HIGH);
+#endif
 }
 
 void updateLight() {
@@ -73,7 +92,9 @@ int hexDigit(char c) {
 
 void stopKeys() {
   Keyboard.releaseAll();
-  pointer.report(0);
+  if (pointerButtons) {
+    absolutePointer.report(0, absolutePointer.x, absolutePointer.y);
+  }
   pointerButtons = 0;
   running = held = false;
   state = "stopped";
@@ -115,15 +136,19 @@ void runInput() {
 }
 
 void setup() {
+#if defined(ARDUINO_WAVESHARE_RP2040_ZERO)
+  statusPixel.begin();
+#else
   for (auto pin : {PIN_LED_R, PIN_LED_G, PIN_LED_B}) {
     digitalWrite(pin, HIGH);
     pinMode(pin, OUTPUT);
   }
+#endif
   setLight(Light::Yellow);
   diagnosticsBegin();
   Serial.begin(115200);
   Keyboard.begin();
-  pointer.begin();
+  absolutePointer.begin();
   // No gateway or DNS: the host must keep its existing internet connection.
   ethernet.config(IPAddress(172,31,254,1),IPAddress(0,0,0,0),IPAddress(255,255,255,248),IPAddress(0,0,0,0));
   if (!ethernet.begin()) {setLight(Light::Red);while(true) delay(1000);}
@@ -138,12 +163,12 @@ void setup() {
   ethernet_arch_lwip_end();
   if (err!=ERR_OK) {setLight(Light::Red);while(true) delay(1000);}
   server.collectHeaders("X-Input-Device-Secret");
-  server.on("/",HTTP_GET,[](){reply(200,"{\"device\":\"XIAO Input Tool\",\"status\":\"/status\",\"input\":\"/input\"}");});
+  server.on("/",HTTP_GET,[](){reply(200,"{\"device\":\"" INPUT_TOOL_NAME "\",\"status\":\"/status\",\"input\":\"/input\"}");});
   server.on("/status",HTTP_GET,[](){
     int32_t wait = running ? (int32_t)(startsAt-millis()) : 0;
-    reply(200,String("{\"device\":\"XIAO Input Tool\",\"running\":")+(running?"true":"false")+
+    reply(200,String("{\"device\":\"" INPUT_TOOL_NAME "\",\"running\":")+(running?"true":"false")+
       ",\"state\":\""+state+"\",\"waitMs\":"+String(wait>0?wait:0)+
-      ",\"hidReady\":"+(tud_hid_ready()?"true":"false")+",\"reports\":"+String((uint32_t)completedReports)+"}");
+      ",\"hidReady\":"+(tud_hid_ready()?"true":"false")+",\"absolutePointer\":true,\"reports\":"+String((uint32_t)completedReports)+"}");
   });
   server.on("/input",HTTP_POST,runInput);
   server.on("/stop",HTTP_POST,[](){if(authorized()){stopKeys();reply(200,"{\"stopped\":true}");}});
@@ -184,11 +209,16 @@ void loop() {
   if (cursor==count) {finishKeys();return;}
   state="typing";
   const auto &r=inputs[cursor];
-  if(r.type==2) {
-    pointer.report(r.a,(int8_t)r.b,(int8_t)r.c,(int8_t)r.d);
-    pointerButtons=r.a;cursor++;nextAt=millis()+15;return;
-  }
   if(r.type==3) {cursor++;nextAt=millis()+(r.a|(uint32_t(r.b)<<8));return;}
+  if(r.type>=16 && r.type<=23) {
+    pointerButtons=r.type&7;
+    absolutePointer.report(pointerButtons, r.a|(uint16_t(r.b)<<8), r.c|(uint16_t(r.d)<<8));
+    cursor++;nextAt=millis()+15;return;
+  }
+  if(r.type==24) {
+    absolutePointer.report(0,absolutePointer.x,absolutePointer.y,(int8_t)r.a);
+    cursor++;nextAt=millis()+15;return;
+  }
   uint8_t m=r.a, key=r.b;
   if(m&1)Keyboard.press(KEY_LEFT_CTRL);
   if(m&2)Keyboard.press(KEY_LEFT_SHIFT);

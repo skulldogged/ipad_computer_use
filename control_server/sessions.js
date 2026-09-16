@@ -1,6 +1,6 @@
 'use strict';
 const {randomUUID} = require('node:crypto');
-const {validID} = require('./calibration/store');
+const {validID} = require('./config');
 
 class Sessions {
   constructor() {this.byDevice = new Map();}

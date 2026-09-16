@@ -11,7 +11,7 @@ test('real Swift socket and HTTP forwarding complete, cancel, and reject a busy 
     const dongle = http.createServer(async (request, response) => {
       response.setHeader('Content-Type', 'application/json');
       if (request.url === '/status') {
-        response.end(JSON.stringify({running, state, hidReady: true})); return;
+        response.end(JSON.stringify({running, state, hidReady: true, absolutePointer:true})); return;
       }
       assert.equal(request.headers['x-input-device-secret'], 'board-secret');
       if (request.url === '/input') {
@@ -26,7 +26,7 @@ test('real Swift socket and HTTP forwarding complete, cancel, and reject a busy 
     });
     await new Promise(resolve => dongle.listen(0, '127.0.0.1', resolve));
     t.after(() => {dongle.closeAllConnections(); dongle.close();});
-    const relay = createRelay({inputDeviceSecret: 'board-secret', calibration: {ready: () => true, lease: () => null, permits: () => false}});
+    const relay = createRelay({inputDeviceSecret: 'board-secret'});
     await new Promise(resolve => relay.server.listen(0, '127.0.0.1', resolve));
     t.after(() => relay.close());
     const port = relay.server.address().port;
@@ -55,8 +55,8 @@ test('real Swift socket and HTTP forwarding complete, cancel, and reject a busy 
     const response = await call('/run', {sequence: 'hello{CMD+SPACE}', delay: 1});
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
     assert.equal(runBody, '03e80300000100680000010065000001006c000001006c000001006f00000108200000');
-    assert.equal((await call('/actions', {actions: [{type: 'move', dx: 10, dy: -20}]})).status, 200);
-    assert.equal(runBody, '02000aec00');
+    assert.equal((await call('/actions', {actions: [{type: 'move', x: 100, y: 200}]})).status, 200);
+    assert.equal(runBody, '106400c800');
     running = true;
     assert.equal((await call('/run', {sequence: 'x'})).status, 502);
     assert.equal(stopped, 0, 'must not stop another controller\'s busy sequence');

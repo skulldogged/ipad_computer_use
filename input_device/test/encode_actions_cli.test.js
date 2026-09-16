@@ -27,10 +27,10 @@ test('encodes actions from a file', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'encode-actions-'));
   try {
     const file = path.join(dir, 'actions.json');
-    fs.writeFileSync(file, '[{"type":"click","button":"left"}]');
+    fs.writeFileSync(file, '[{"type":"click","x":0,"y":0,"button":"left"}]');
     const result = run(['--file', file]);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, '02010000000200000000\n');
+    assert.equal(result.stdout, '100000000011000000001000000000\n');
   } finally {
     fs.rmSync(dir, {recursive: true, force: true});
   }

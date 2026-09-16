@@ -16,13 +16,11 @@ struct RelayView: View {
     @AppStorage("onboardingCompleted") private var onboardingCompleted = false
     @State private var onboardingStep = 0
     @State private var draftServer = ""
-    @State private var calibrationRequested = false
     @State private var setup = SetupStatus()
     @State private var currentID: String? = try? SharedConfiguration.load().sessionID
     @State private var editingServer = false
     @State private var broadcastLauncher = BroadcastLauncher()
     @State private var showNativePicker = false
-    @State private var calibrating = false
     @State private var working = false
     @State private var ending = false
     @State private var message: String?
@@ -40,8 +38,6 @@ struct RelayView: View {
         if setup.sessionState == "starting" { return "Waiting for screen sharing" }
         if !active { return "Session disconnected" }
         if setup.inputReady != true { return "Input tool disconnected" }
-        if setup.calibrating { return "Calibrating" }
-        if setup.calibrated != true { return "Calibration needed" }
         return setup.sendingInput ? "Sending input" : "Ready"
     }
 
@@ -72,19 +68,6 @@ struct RelayView: View {
                                 }.buttonStyle(.bordered).disabled(working || draftServer.isEmpty)
                             }.padding(.vertical, 12)
                         }.padding(.bottom, 18)
-                        Divider()
-                        readiness("Pointer", icon: "scope", value: setup.calibrated == true ? "Calibrated" : (setup.calibrated == nil ? "Not verified" : "Calibration needed"), ready: setup.calibrated == true, checking: setup.checkingPointer)
-                        Button(setup.calibrated == true ? "Recalibrate Pointer" : "Calibrate Pointer", systemImage: "scope") {
-                            Task {
-                                if active { calibrating = true }
-                                else {
-                                    calibrationRequested = true
-                                    if currentID == nil { await startSession() }
-                                    else { openBroadcastConfirmation() }
-                                }
-                            }
-                        }.buttonStyle(.bordered).padding(.bottom, 18)
-                            .disabled(working || setup.inputReady != true || !setup.serverReachable)
                     }
                     if !setup.serverReachable, let next = setup.nextCheck {
                         HStack {
@@ -135,15 +118,6 @@ struct RelayView: View {
                         .disabled(working)
                 }
             }
-            .fullScreenCover(isPresented: $calibrating) {
-                CalibrationView(address: address, onCompleted: {
-                    guard !onboardingCompleted, onboardingStep == 2 else { return }
-                    onboardingCompleted = true
-                    calibrationRequested = false
-                    calibrating = false
-                    refreshID += 1
-                })
-            }
             .onAppear { draftServer = address }
             .task(id: "\(address)|\(phase == .active)|\(refreshID)|\(launchRequest.revision)") {
                 guard phase == .active else { return }
@@ -151,16 +125,11 @@ struct RelayView: View {
                 setup.retryNow()
                 var background = false
                 while !Task.isCancelled {
-                    await setup.refresh(address: address, checkInput: !calibrating, background: background)
+                    await setup.refresh(address: address, background: background)
                     background = true
                     guard !Task.isCancelled else { return }
                     if active {
                         showNativePicker = false
-                        if calibrationRequested, setup.inputReady == true,
-                           onboardingCompleted || (onboardingStep == 2 && setup.inputCompatible) {
-                            calibrationRequested = false
-                            calibrating = true
-                        }
                         if let id = currentID {
                             await SessionActivity.update(id, status: setup.sendingInput ? "Sending input" : "Session active")
                         }
@@ -187,13 +156,13 @@ struct RelayView: View {
 
     private var onboarding: some View {
         VStack(alignment: .leading, spacing: 24) {
-            Text("Step \(onboardingStep + 1) of 3").font(.subheadline).foregroundStyle(.secondary)
-            ProgressView(value: Double(onboardingStep + 1), total: 3)
+            Text("Step \(onboardingStep + 1) of 2").font(.subheadline).foregroundStyle(.secondary)
+            ProgressView(value: Double(onboardingStep + 1), total: 2)
                 .accessibilityLabel("Setup progress")
-            Text(["Connect your input tool", "Connect your control server", "Calibrate your pointer"][onboardingStep])
+            Text(["Connect your input tool", "Connect your control server"][onboardingStep])
                 .font(.title2.bold())
             if onboardingStep == 0 {
-                Text("Plug the XIAO into your iPad's USB-C port.")
+                Text("Plug the RP2040 input tool into your iPad's USB-C port.")
                 readiness("Input Tool", icon: "cable.connector", value: setup.inputDetail,
                           ready: setup.inputReady == true, checking: setup.checkingInput)
                 if setup.inputReady == true {
@@ -211,39 +180,12 @@ struct RelayView: View {
                     .accessibilityLabel("Control server URL").disabled(working)
                 Button("Continue") { Task { await connectOnboardingServer() } }
                     .buttonStyle(.borderedProminent).disabled(working || draftServer.isEmpty)
-            } else {
-                Text("Keep your iPad in its usual orientation. Approve screen sharing, then leave the pointer untouched while calibration runs.")
-                readiness("Input Tool", icon: "cable.connector", value: setup.inputDetail,
-                          ready: setup.inputReady == true, checking: setup.checkingInput)
-                readiness("Control Server", icon: "network", value: setup.serverDetail,
-                          ready: setup.serverReachable, checking: setup.checkingServer)
-                Button(currentID == nil ? "Start Calibration" : (active ? "Calibrate Pointer" : "Open Broadcast Confirmation")) {
-                    Task {
-                        message = nil
-                        if active { calibrating = true }
-                        else {
-                            calibrationRequested = true
-                            if currentID == nil { await startSession() }
-                            else { openBroadcastConfirmation() }
-                        }
-                    }
-                }.buttonStyle(.borderedProminent)
-                    .disabled(working || setup.inputReady != true || !setup.inputCompatible || !setup.serverReachable)
-                if calibrationRequested {
-                    HStack { ProgressView(); Text("Waiting for screen sharing") }
-                }
-                if currentID != nil {
-                    Button("End Session", role: .destructive) {
-                        calibrationRequested = false
-                        Task { await endSession() }
-                    }.disabled(working)
-                }
             }
             if let message { Text(message).foregroundStyle(.red) }
             if working { ProgressView("Connecting...") }
             if onboardingStep > 0 {
                 Button("Back", systemImage: "chevron.left") {
-                    onboardingStep -= 1; message = nil; calibrationRequested = false
+                    onboardingStep -= 1; message = nil
                 }.disabled(working)
             }
         }.padding(.top, 24)
@@ -265,7 +207,7 @@ struct RelayView: View {
         do {
             try SharedConfiguration(address: candidate, sessionID: currentID).save()
             address = candidate
-            onboardingStep = 2
+            onboardingCompleted = true
             refreshID += 1
         } catch { message = error.localizedDescription }
     }
@@ -285,7 +227,6 @@ struct RelayView: View {
         do {
             try SharedConfiguration(address: candidate).save()
             address = candidate
-            calibrationRequested = false
             editingServer = false
             setup.reset(); refreshID += 1
         } catch { message = error.localizedDescription }
@@ -343,7 +284,6 @@ struct RelayView: View {
 
     private func endSession() async {
         guard let id = currentID, !working else { return }
-        calibrationRequested = false
         working = true; ending = true; message = nil
         defer { working = false; ending = false }
         // A saved session is not proof of a broadcast. Revoke locally first so

@@ -69,6 +69,9 @@ final class RelayConnection {
                                            "capabilities": screenshotProvider == nil ? ["input"] : ["input", "screen"]]
                 if let deviceID { hello["deviceID"] = deviceID }
                 if let sessionID { hello["sessionID"] = sessionID }
+                if let tool = try? await dongle.status() {
+                    hello["absolutePointer"] = tool.absolutePointer
+                }
                 try await send(hello, on: ws)
                 while !Task.isCancelled {
                     let message = try await ws.receive()

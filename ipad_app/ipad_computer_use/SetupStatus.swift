@@ -3,8 +3,6 @@ import Observation
 
 private struct DeviceSetupStatus: Decodable {
     let connected: Bool
-    let pointerCalibrated: Bool
-    let calibrating: Bool
     let screenBroadcast: Bool
     let sessionID: String?
     let sessionState: String?
@@ -18,8 +16,6 @@ final class SetupStatus {
     var inputDetail = "Checking USB connection"
     var serverConnected = false
     var serverDetail = "Not connected"
-    var calibrated: Bool?
-    var calibrating = false
     var screenBroadcast = false
     var serverReachable = false
     var sessionID: String?
@@ -27,11 +23,10 @@ final class SetupStatus {
     var sendingInput = false
     var checkingInput = false
     var checkingServer = false
-    var checkingPointer = false
     var hasCheckedServer = false
     var retryDelay = 2
     var nextCheck: Date?
-    var isChecking: Bool { checkingInput || checkingServer || checkingPointer }
+    var isChecking: Bool { checkingInput || checkingServer }
 
     func retryNow() {
         retryDelay = 2
@@ -49,8 +44,8 @@ final class SetupStatus {
         self.session = session ?? URLSession(configuration: configuration)
     }
 
-    var readyCount: Int { (inputReady == true ? 1 : 0) + (serverConnected ? 1 : 0) + (calibrated == true ? 1 : 0) }
-    var allReady: Bool { readyCount == 3 && !calibrating }
+    var readyCount: Int { (inputReady == true ? 1 : 0) + (serverConnected ? 1 : 0) }
+    var allReady: Bool { readyCount == 2 }
     var nextStep: Int { inputReady != true ? 0 : (!serverConnected ? 1 : 2) }
 
     func reset() {
@@ -58,9 +53,9 @@ final class SetupStatus {
         inputReady = nil; inputDetail = "Checking USB connection"
         inputCompatible = false
         serverConnected = false; serverDetail = "Checking connection"
-        calibrated = nil; calibrating = false; screenBroadcast = false
+        screenBroadcast = false
         serverReachable = false
-        checkingInput = false; checkingServer = false; checkingPointer = false; hasCheckedServer = false
+        checkingInput = false; checkingServer = false; hasCheckedServer = false
         retryNow()
     }
 
@@ -68,14 +63,13 @@ final class SetupStatus {
         generation += 1
         let current = generation
         let checkInput = checkInput && (!background || inputReady != true)
-        let checkServer = !background || !serverReachable || calibrated != true || sessionID != nil
+        let checkServer = !background || !serverReachable || sessionID != nil
         checkingInput = checkInput
         checkingServer = checkServer && (!background || !serverReachable)
-        checkingPointer = checkServer && (!background || calibrated != true)
         nextCheck = nil
         defer {
             if generation == current {
-                checkingInput = false; checkingServer = false; checkingPointer = false
+                checkingInput = false; checkingServer = false
             }
         }
         if checkInput {
@@ -83,11 +77,11 @@ final class SetupStatus {
                 let status = try await dongle.status()
                 try Task.checkCancellation()
                 guard generation == current else { return }
-                inputReady = status.hidReady
+                inputReady = status.hidReady && status.absolutePointer
                 // Older working firmware uses different display names. Decoding
                 // the required status fields checks the status protocol, not branding.
-                inputCompatible = true
-                inputDetail = status.hidReady ? (status.running ? "Input tool is sending input" : "XIAO RP2040 · USB") : "Input tool found; USB input not ready"
+                inputCompatible = status.absolutePointer
+                inputDetail = !status.absolutePointer ? "Update input tool firmware" : status.hidReady ? (status.running ? "Input tool is sending input" : "RP2040 input tool · USB") : "Input tool found; USB input not ready"
             } catch {
                 guard !Task.isCancelled, generation == current else { return }
                 inputReady = false
@@ -116,7 +110,7 @@ final class SetupStatus {
               url.user == nil, url.password == nil, url.query == nil else {
             serverConnected = false; serverDetail = "Connection details needed"
             serverReachable = false; hasCheckedServer = true
-            calibrated = nil; calibrating = false; screenBroadcast = false; return
+            screenBroadcast = false; return
         }
         url.scheme = url.scheme == "wss" ? "https" : "http"
         url.path = "/device-status/" + SharedConfiguration.localDeviceID(); url.fragment = nil
@@ -130,18 +124,18 @@ final class SetupStatus {
             let status = try JSONDecoder().decode(DeviceSetupStatus.self, from: data)
             try Task.checkCancellation()
             guard generation == current else { return }
-            serverConnected = status.connected; calibrated = status.pointerCalibrated
+            serverConnected = status.connected
             serverReachable = true; sessionID = status.sessionID; sessionState = status.sessionState ?? "idle"
             sendingInput = status.sendingInput ?? false
-            calibrating = status.calibrating; screenBroadcast = status.screenBroadcast
+            screenBroadcast = status.screenBroadcast
             serverDetail = status.connected ? "Session connected" : "Available"
             hasCheckedServer = true
             retryDelay = 2
         } catch {
             guard !Task.isCancelled, generation == current else { return }
-            serverConnected = false; calibrated = nil; calibrating = false; screenBroadcast = false
+            serverConnected = false; screenBroadcast = false
             serverReachable = false; sendingInput = false
-            serverDetail = (error as? RelayError)?.message ?? "Control server not reachable"
+            serverDetail = (error as? RelayError)?.message ?? error.localizedDescription
             hasCheckedServer = true
             retryDelay = min(retryDelay * 2, 30)
         }

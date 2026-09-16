@@ -12,4 +12,5 @@ function readInputDeviceSecret() {
   catch (error) {if (error.code !== 'EEXIST') throw error;}
   return fs.readFileSync(file, 'utf8').trim();
 }
-module.exports = {stateDirectory, readInputDeviceSecret};
+const validID = value => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+module.exports = {stateDirectory, readInputDeviceSecret, validID};

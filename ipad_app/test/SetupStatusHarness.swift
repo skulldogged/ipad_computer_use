@@ -40,14 +40,14 @@ final class StatusProtocol: URLProtocol {
             precondition((try! JSONSerialization.jsonObject(with: twice) as! [String: String]) == value)
         }
         let tool = try! JSONDecoder().decode(DongleStatus.self, from: Data(
-            "{\"device\":\"XIAO Input Tool\",\"running\":false,\"state\":\"idle\",\"hidReady\":true}".utf8))
+            "{\"device\":\"XIAO Input Tool\",\"running\":false,\"state\":\"idle\",\"hidReady\":true,\"absolutePointer\":true}".utf8))
         precondition(tool.device == "XIAO Input Tool" && tool.hidReady)
         let unidentified = try! JSONDecoder().decode(DongleStatus.self, from: Data(
-            "{\"running\":false,\"state\":\"idle\",\"hidReady\":true}".utf8))
+            "{\"running\":false,\"state\":\"idle\",\"hidReady\":true,\"absolutePointer\":true}".utf8))
         precondition(unidentified.device == nil)
         for name in ["XIAO Net Echo", "XIAO Input Tool", "Future display name"] {
             let bytes = try! JSONSerialization.data(withJSONObject: [
-                "device": name, "running": false, "state": "idle", "hidReady": true
+                "device": name, "running": false, "state": "idle", "hidReady": true, "absolutePointer": true
             ])
             let status = try! JSONDecoder().decode(DongleStatus.self, from: bytes)
             precondition(status.hidReady)
@@ -62,22 +62,22 @@ final class StatusProtocol: URLProtocol {
         let state = SetupStatus(session: URLSession(configuration: configuration))
         precondition(!state.hasCheckedServer && !state.isChecking)
         let address = "wss://control.example/device"
-        StatusProtocol.body = "{\"connected\":true,\"pointerCalibrated\":true,\"calibrating\":false,\"screenBroadcast\":true}"
+        StatusProtocol.body = "{\"connected\":true,\"screenBroadcast\":true}"
         await state.refresh(address: address, checkInput: false)
-        precondition(state.serverConnected && state.calibrated == true && state.screenBroadcast)
+        precondition(state.serverConnected && state.screenBroadcast)
         precondition(state.hasCheckedServer && !state.isChecking && state.retryDelay == 2)
-        precondition(!state.allReady && state.readyCount == 2)
+        precondition(!state.allReady && state.readyCount == 1)
         precondition(StatusProtocol.request?.url?.scheme == "https")
         precondition(StatusProtocol.request?.url?.path == "/device-status/" + SharedConfiguration.localDeviceID())
         precondition(StatusProtocol.request?.value(forHTTPHeaderField: "Authorization") == nil)
         state.inputReady = true
         precondition(state.allReady)
-        StatusProtocol.body = "{\"connected\":false,\"pointerCalibrated\":true,\"calibrating\":false,\"screenBroadcast\":false}"
+        StatusProtocol.body = "{\"connected\":false,\"screenBroadcast\":false}"
         await state.refresh(address: address, checkInput: false)
-        precondition(!state.serverConnected && state.calibrated == true && !state.allReady)
+        precondition(!state.serverConnected && !state.allReady)
         StatusProtocol.code = 503
         await state.refresh(address: address, checkInput: false)
-        precondition(!state.serverConnected && state.calibrated == nil && !state.screenBroadcast)
+        precondition(!state.serverConnected && !state.screenBroadcast)
         precondition(state.serverDetail == "Server status unavailable")
         precondition(state.retryDelay == 4 && !state.isChecking)
         for _ in 0..<5 { await state.refresh(address: address, checkInput: false) }
@@ -87,7 +87,7 @@ final class StatusProtocol: URLProtocol {
         precondition(state.retryDelay == 2 && state.nextCheck == nil)
         StatusProtocol.code = 200; StatusProtocol.body = "invalid"
         await state.refresh(address: address, checkInput: false)
-        precondition(!state.serverConnected && state.calibrated == nil)
+        precondition(!state.serverConnected)
         await state.refresh(address: "", checkInput: false)
         precondition(state.serverDetail == "Connection details needed")
         state.reset()
@@ -102,24 +102,14 @@ final class StatusProtocol: URLProtocol {
         await checking.value
         precondition(!state.isChecking && !state.hasCheckedServer && state.retryDelay == 2)
         StatusProtocol.hold = false
-        StatusProtocol.body = "{\"connected\":true,\"pointerCalibrated\":true,\"calibrating\":false,\"screenBroadcast\":true}"
+        StatusProtocol.body = "{\"connected\":true,\"screenBroadcast\":true}"
         await state.refresh(address: address, checkInput: false)
         precondition(state.serverReachable && state.hasCheckedServer && !state.isChecking)
         state.inputReady = true
         state.sessionID = nil
         StatusProtocol.request = nil
         await state.refresh(address: address, background: true)
-        precondition(StatusProtocol.request == nil && state.inputReady == true && state.calibrated == true)
-        state.calibrated = false
-        StatusProtocol.hold = true
-        let pointerCheck = Task { await state.refresh(address: address, background: true) }
-        while !state.isChecking { await Task.yield() }
-        precondition(state.checkingPointer && !state.checkingServer && !state.checkingInput)
-        pointerCheck.cancel()
-        await pointerCheck.value
-        StatusProtocol.hold = false
-        await state.refresh(address: address, background: true)
-        precondition(state.calibrated == true && !state.isChecking)
+        precondition(StatusProtocol.request == nil && state.inputReady == true)
         state.sessionID = UUID().uuidString
         StatusProtocol.request = nil
         await state.refresh(address: address, background: true)
@@ -128,15 +118,15 @@ final class StatusProtocol: URLProtocol {
         StatusProtocol.hold = true
         let serverCheck = Task { await state.refresh(address: address, background: true) }
         while !state.isChecking { await Task.yield() }
-        precondition(state.checkingServer && !state.checkingPointer && !state.checkingInput)
+        precondition(state.checkingServer && !state.checkingInput)
         serverCheck.cancel()
         await serverCheck.value
         StatusProtocol.hold = false
         state.retryNow()
         StatusProtocol.request = nil
         await state.refresh(address: address, checkInput: false)
-        precondition(StatusProtocol.request != nil && state.serverReachable && state.calibrated == true)
-        print("Selective refresh passed: healthy idle skips requests; pointer-only and server-only retries; active-session telemetry; manual refresh recovery.")
+        precondition(StatusProtocol.request != nil && state.serverReachable)
+        print("Selective refresh passed: healthy idle skips requests; server retries; active-session telemetry; manual refresh recovery.")
         print("Setup status tests passed: connections, loading, cancellation, retry backoff, manual retry, recovery, and reset.")
     }
 }

@@ -26,7 +26,7 @@ test('MCP tools call through to the loopback control API', async t => {
   const seen = [];
   const control = await fakeControl(t, async (request, body) => {
     seen.push({url: request.url, method: request.method, auth: request.headers.authorization, body});
-    if (request.url === '/status') return {statusCode: 200, body: {connected: true, pointerCalibrated: true}};
+    if (request.url === '/status') return {statusCode: 200, body: {connected: true, absolutePointer: true}};
     if (request.url === '/screen') return {statusCode: 200, body: {
       frameID: 'frame-1', capturedAt: 1, receivedAt: 2, width: 10, height: 10,
       orientation: 'up', mimeType: 'image/jpeg', data: '/9j/2Q=='
@@ -51,12 +51,12 @@ test('MCP tools call through to the loopback control API', async t => {
 });
 
 test('MCP execution errors are returned as tool errors', async t => {
-  const control = await fakeControl(t, async () => ({statusCode: 428, body: {code: 'calibration_required', error: 'Calibrate first'}}));
+  const control = await fakeControl(t, async () => ({statusCode: 409, body: {error: 'Absolute pointer firmware required'}}));
   const {call} = await setup(t, {controlBaseUrl: control.base});
   const result = await call({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name: 'issue_actions', arguments: {actions: [{type: 'click', x: 1, y: 1}]}}});
   assert.equal(result.result.isError, true);
-  assert.match(result.result.content[0].text, /Calibrate first/);
-  assert.equal(result.result.structuredContent.status, 428);
+  assert.match(result.result.content[0].text, /Absolute pointer firmware required/);
+  assert.equal(result.result.structuredContent.status, 409);
 });
 
 test('MCP endpoint rejects browser origins', async t => {

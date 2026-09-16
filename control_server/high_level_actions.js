@@ -1,7 +1,5 @@
 'use strict';
 
-const {chooseMove} = require('./calibration/mapping');
-
 const buttons = new Set(['left', 'right', 'middle']);
 const modifiers = new Set(['ctrl', 'shift', 'alt', 'cmd']);
 const namedKeys = new Set(['enter', 'return', 'escape', 'esc', 'backspace', 'tab', 'space',
@@ -40,93 +38,42 @@ function keyChord(value) {
   return `{${parts.join('+')}}`;
 }
 
-function scalePoint(p, coordinateSpace, profile) {
-  if (!profile) throw Error('Pointer calibration profile required');
-  const units = coordinateSpace?.units || 'screen_pixels';
-  if (units === 'ui_points') return p;
-  if (units !== 'screen_pixels') throw Error('coordinateSpace.units must be screen_pixels or ui_points');
-  const width = finite(coordinateSpace?.width, 'coordinateSpace.width');
-  const height = finite(coordinateSpace?.height, 'coordinateSpace.height');
-  if (width <= 0 || height <= 0) throw Error('coordinateSpace dimensions must be positive');
-  return {x: p.x * profile.geometry[0] / width, y: p.y * profile.geometry[1] / height};
-}
-
-function moveBetween(from, to, profile) {
-  const ex = to.x - from.x, ey = to.y - from.y;
-  if (Math.hypot(ex, ey) === 0) return [];
-  const actions = [];
-  let remaining = {x: ex, y: ey};
-  for (let i = 0; i < 80 && Math.hypot(remaining.x, remaining.y) > 1.5; i++) {
-    const chosen = chooseMove(remaining.x, remaining.y, profile.curve);
-    if (!chosen || (!chosen.dx && !chosen.dy)) throw Error('Pointer movement did not converge');
-    actions.push({type: 'move', dx: chosen.dx, dy: chosen.dy});
-    remaining = {x: remaining.x - chosen.px, y: remaining.y - chosen.py};
-  }
-  if (Math.hypot(remaining.x, remaining.y) > 4) throw Error('Pointer movement needs recalibration');
-  return actions;
-}
-
-function compileHighLevelActions(body, profile) {
+function compileHighLevelActions(body) {
   if (!body || typeof body !== 'object') throw Error('Request body must be an object');
   if (!Array.isArray(body.actions) || !body.actions.length || body.actions.length > 128) throw Error('Use 1 to 128 actions');
   const coordinateSpace = body.coordinateSpace;
-  let pointer = body.pointer ? scalePoint(point(body.pointer, 'pointer'), coordinateSpace, profile) : null;
+  const scale = p => {
+    const width = finite(coordinateSpace?.width, 'coordinateSpace.width');
+    const height = finite(coordinateSpace?.height, 'coordinateSpace.height');
+    if (width <= 0 || height <= 0) throw Error('coordinateSpace dimensions must be positive');
+    if (!['screen_pixels', 'ui_points'].includes(coordinateSpace?.units || 'screen_pixels')) throw Error('coordinateSpace.units must be screen_pixels or ui_points');
+    if (p.x < 0 || p.x > width || p.y < 0 || p.y > height) throw Error('Point must be inside coordinateSpace');
+    return {x: Math.round(p.x / width * 32767), y: Math.round(p.y / height * 32767)};
+  };
   const output = [];
-
   for (const action of body.actions) {
     if (!action || typeof action !== 'object') throw Error('Invalid action');
     switch (action.type) {
     case 'type_text':
       if (typeof action.text !== 'string') throw Error('type_text.text must be text');
-      output.push({type: 'keys', sequence: action.text});
-      break;
-    case 'press':
-      output.push({type: 'keys', sequence: keyChord(action.keys)});
-      break;
-    case 'wait':
-      output.push({type: 'wait', ms: integer(action.ms, 'wait.ms', 10000)});
-      break;
-    case 'scroll':
-      output.push({type: 'scroll', wheel: integer(action.dy ?? action.wheel, 'scroll.dy', 127)});
-      break;
-    case 'move_by':
-      output.push({type: 'move', dx: integer(action.dx, 'move_by.dx', 4096), dy: integer(action.dy, 'move_by.dy', 4096)});
-      pointer = null;
-      break;
-    case 'move_to': {
-      if (!pointer) throw Error('pointer is required before move_to');
-      const target = scalePoint(point(action, 'move_to'), coordinateSpace, profile);
-      output.push(...moveBetween(pointer, target, profile));
-      pointer = target;
-      break;
-    }
+      output.push({type:'keys', sequence:action.text}); break;
+    case 'press': output.push({type:'keys', sequence:keyChord(action.keys)}); break;
+    case 'wait': output.push({type:'wait', ms:integer(action.ms,'wait.ms',10000)}); break;
+    case 'scroll': output.push({type:'scroll', wheel:integer(action.dy ?? action.wheel,'scroll.dy',127)}); break;
+    case 'move_to': output.push({type:'move', ...scale(point(action,'move_to'))}); break;
     case 'click': {
-      const button = action.button || 'left';
+      const button=action.button || 'left';
       if (!buttons.has(button)) throw Error('click.button must be left, right, or middle');
-      if (Number.isFinite(action.x) || Number.isFinite(action.y)) {
-        if (!pointer) throw Error('pointer is required before coordinate click');
-        const target = scalePoint(point(action, 'click'), coordinateSpace, profile);
-        output.push(...moveBetween(pointer, target, profile));
-        pointer = target;
-      }
-      output.push({type: 'click', button});
-      break;
+      output.push({type:'click',button,...scale(point(action,'click'))}); break;
     }
     case 'drag': {
-      const button = action.button || 'left';
+      const button=action.button || 'left';
       if (!buttons.has(button)) throw Error('drag.button must be left, right, or middle');
-      const from = scalePoint(point(action.from, 'drag.from'), coordinateSpace, profile);
-      const to = scalePoint(point(action.to, 'drag.to'), coordinateSpace, profile);
-      output.push(...moveBetween(pointer || from, from, profile));
-      for (const move of moveBetween(from, to, profile)) output.push({...move, type: 'drag', button});
-      pointer = to;
-      break;
+      output.push({type:'drag',button,from:scale(point(action.from,'drag.from')),to:scale(point(action.to,'drag.to'))}); break;
     }
-    default:
-      throw Error('Unknown computer-use action: ' + action.type);
+    default: throw Error('Unknown computer-use action: '+action.type);
     }
   }
   return output;
 }
-
 module.exports = {compileHighLevelActions};

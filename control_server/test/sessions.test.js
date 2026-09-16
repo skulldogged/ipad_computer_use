@@ -40,7 +40,7 @@ test('session permits expire, are device-bound, and can only be claimed once', (
 });
 
 test('session end revokes input immediately and waits for hardware stop acknowledgment', async t => {
-  const app = createRelay({calibration: {ready: () => true, lease: () => null, permits: () => false}});
+  const app = createRelay();
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   t.after(() => app.close());
   const base = `http://127.0.0.1:${app.server.address().port}`;
@@ -51,7 +51,7 @@ test('session end revokes input immediately and waits for hardware stop acknowle
   async function socket(sessionID) {
     const ws = new WebSocket(base.replace('http', 'ws') + '/device');
     await once(ws, 'open');
-    ws.send(JSON.stringify({type: 'hello', name: 'Test', capabilities: ['input','screen'], deviceID, sessionID}));
+    ws.send(JSON.stringify({type: 'hello', name: 'Test', capabilities: ['input','screen'], absolutePointer:true, deviceID, sessionID}));
     return ws;
   }
   assert.equal((await call('/session/start', {deviceID}, {Origin: 'https://example.com'})).status, 403);
@@ -60,7 +60,7 @@ test('session end revokes input immediately and waits for hardware stop acknowle
   const {sessionID} = await (await call('/session/start', {deviceID})).json();
   const ws = await socket(sessionID); await once(ws, 'message');
   const runMessage = once(ws, 'message');
-  const pending = call('/actions', {actions: [{type: 'move', dx: 1, dy: 0}]});
+  const pending = call('/actions', {actions: [{type: 'move', x: 1, y: 0}]});
   await runMessage;
   assert.equal((await call('/session/end', {deviceID, sessionID: 'wrong'})).status, 404);
   const stopMessage = once(ws, 'message');

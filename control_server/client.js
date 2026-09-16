@@ -6,12 +6,13 @@ const path = require('node:path');
 async function main() {
   const [command = 'status', ...args] = process.argv.slice(2);
   if (!['status', 'send', 'stop', 'screen', 'move', 'click', 'scroll', 'drag', 'actions', 'computer_use'].includes(command))
-    throw Error('Usage: node control_server/client.js status|stop|screen [file.jpg]|send "hello" [delay]|move dx dy|click [left|right]|scroll wheel|drag dx dy|actions file.json|computer_use file.json');
+    throw Error('Usage: node control_server/client.js status|stop|screen [file.jpg]|send "hello" [delay]|move x y|click x y [left|right]|scroll wheel|drag x1 y1 x2 y2|actions file.json|computer_use file.json');
   if (command === 'send' && !args.length) throw Error('Supply a sequence to send');
   let body, endpoint = command;
   if (command === 'send') {endpoint = 'run'; body = {sequence: args[0], delay: Number(args[1] || 1)};}
-  else if (['move', 'drag'].includes(command)) {endpoint = 'actions'; body = {actions: [{type: command, dx: Number(args[0]), dy: Number(args[1])}]};}
-  else if (command === 'click') {endpoint = 'actions'; body = {actions: [{type: 'click', button: args[0] || 'left'}]};}
+  else if (command === 'move') {endpoint='actions';body={actions:[{type:'move',x:Number(args[0]),y:Number(args[1])}]};}
+  else if (command === 'drag') {endpoint='actions';body={actions:[{type:'drag',from:{x:Number(args[0]),y:Number(args[1])},to:{x:Number(args[2]),y:Number(args[3])}}]};}
+  else if (command === 'click') {endpoint = 'actions'; body = {actions: [{type: 'click', x:Number(args[0]),y:Number(args[1]),button:args[2] || 'left'}]};}
   else if (command === 'scroll') {endpoint = 'actions'; body = {actions: [{type: 'scroll', wheel: Number(args[0])}]};}
   else if (command === 'actions') {body = {actions: JSON.parse(fs.readFileSync(args[0], 'utf8'))};}
   else if (command === 'computer_use') {endpoint = 'computer-use/actions'; body = JSON.parse(fs.readFileSync(args[0], 'utf8'));}

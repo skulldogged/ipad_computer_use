@@ -1,23 +1,19 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {encodeActions} = require('../protocol/actions');
-test('mixed actions preserve order and release clicks', () => {
-  assert.equal(encodeActions([{type: 'keys', sequence: 'h'}, {type: 'click'}, {type: 'wait', ms: 300}]),
-    '010068000002010000000200000000032c010000');
+test('absolute clicks retain their position while pressing and releasing', () => {
+  assert.equal(encodeActions([{type:'click',x:32767,y:16384}]), '10ff7f004011ff7f004010ff7f0040');
+  for (const x of [-1,32768,1.5,NaN]) assert.throws(() => encodeActions([{type:'move',x,y:0}]));
 });
-test('large relative movements split into bounded reports with exact sums', () => {
-  const data = Buffer.from(encodeActions([{type: 'move', dx: -600, dy: 330}]), 'hex');
-  let x = 0, y = 0;
-  for (let i = 0; i < data.length; i += 5) {x += data.readInt8(i + 2); y += data.readInt8(i + 3);}
-  assert.equal(x, -600); assert.equal(y, 330);
+test('absolute drag holds continuously and releases at the exact destination', () => {
+  const b=Buffer.from(encodeActions([{type:'drag',from:{x:0,y:0},to:{x:32767,y:12345}}]),'hex');
+  assert.equal(b[0],16);
+  for(let i=5;i<b.length-5;i+=5) assert.equal(b[i],17);
+  assert.equal(b.at(-5),16);
+  assert.equal(b.readUInt16LE(b.length-4),32767);
+  assert.equal(b.readUInt16LE(b.length-2),12345);
 });
-test('drag holds button during movement and releases at end', () => {
-  const data = Buffer.from(encodeActions([{type: 'drag', dx: 250, dy: 0}]), 'hex');
-  assert.equal(data[1], 1); assert.equal(data[6], 1); assert.equal(data.at(-4), 0);
-});
-test('invalid and unbounded batches are rejected', () => {
-  for (const actions of [[], [{type: 'move', dx: 1.5, dy: 0}], [{type: 'click', button: 'other'}],
-    [{type: 'scroll', wheel: 128}], [{type: 'wait', ms: -1}],
-    [{type: 'wait', ms: 6000}, {type: 'wait', ms: 6000}], [{type: 'keys', sequence: 'a'.repeat(513)}]])
-    assert.throws(() => encodeActions(actions));
+test('keyboard, absolute wheel and waits retain ordering',()=>{
+  assert.equal(encodeActions([{type:'keys',sequence:'h'},{type:'scroll',wheel:-3},{type:'wait',ms:300}]),'010068000018fd000000032c010000');
+  for(const a of [[],[{type:'move',dx:1,dy:1}],[{type:'scroll',wheel:128}],[{type:'wait',ms:-1}],[{type:'keys',sequence:'a'.repeat(513)}]]) assert.throws(()=>encodeActions(a));
 });

@@ -1,44 +1,26 @@
-# Input tool HTTP protocol
+# USB input protocol
 
-Base URL: `http://172.31.254.1`. Transport is the attached USB NCM interface.
-`GET /status` returns non-sensitive readiness state. Mutating requests require
-the `X-Input-Device-Secret` header. By default, the firmware build script embeds
-the secret stored in `control_server/.state/input_device_secret`, or the value of
-`INPUT_DEVICE_SECRET` when that environment variable is set.
+USB NCM address: http://172.31.254.1. The iPad receives an address by DHCP without
+changing its internet gateway. GET /status reports hidReady, absolutePointer,
+running, state and completed report count. POST /input and POST /stop require
+X-Input-Device-Secret. The secret is embedded at build time and never returned.
 
-| Route | Behavior |
+Input bodies are hexadecimal five-byte records:
+
+| Action | Bytes |
 | --- | --- |
-| `GET /` | Device/API description |
-| `GET /status` | hidReady, running, state, waitMs, reports |
-| `POST /input` | Validate and queue ordered keyboard/mouse/wait reports |
-| `POST /stop` | Request key/button release and stop playback |
+| Key | 01 modifiers key 00 00 |
+| Wait | 03 millisecondsLow millisecondsHigh 00 00 |
+| Absolute pointer | (0x10 OR buttons) xLow xHigh yLow yHigh |
+| Wheel at last position | 18 wheel 00 00 00 |
 
-`/input` body is hexadecimal five-byte records. Use wait records for timing.
-There is no separate delay field. Each record is:
+X/Y are unsigned little-endian values 0..32767 spanning the display. Buttons are
+left=1,right=2,middle=4. Wheel is signed -127..127. Keys use Arduino keyboard
+encoding; modifiers are Ctrl=1,Shift=2,Alt=4,Command=8. The codec handles key names.
+Relative mouse records are rejected. Click and drag preserve absolute coordinates
+while pressing/releasing. This is USB mouse input, not native multitouch.
 
-| Kind | Five bytes |
-| --- | --- |
-| Key | `01 modifiers key 00 00` |
-| Mouse | `02 buttons dx dy wheel` |
-| Wait | `03 millisecondsLow millisecondsHigh 00 00` |
-
-Mouse deltas/wheel are signed 8-bit values. Buttons: left=1, right=2, middle=4.
-Key modifiers: Ctrl=1, Shift=2, Alt=4, Command=8. Key values use the Arduino
-keyboard encoding; the exported codec handles names and U.S.-layout ASCII text.
-Keys press then release. A drag is mouse records with a held button followed by
-a zero-button release. It is not a native touch digitizer gesture.
-
-At most 512 records; total waits at most 10 seconds; no unreleased buttons at
-the end. Only one batch runs at a time. The JavaScript codec additionally limits
-structured batches to 128 actions. Large deltas split into multiple reports.
-
-Responses: 202 accepted, 400 malformed, 403 wrong/missing secret, 409 busy.
-Acceptance does not mean execution completed: poll `/status` until `running`
-is false and `state` is `done`. A reboot can still make an in-flight result
-uncertain. Do not automatically retry. Firmware has a 70-second deadline and
-stops on USB unmount/suspend. HTTP handling may wait while a key/button is held;
-`/stop` is not a guaranteed instantaneous emergency stop. Unplug the tool when
-input release cannot be confirmed.
-
-The protocol carries relative HID counts, not screenshot coordinates. Neither
-the firmware nor its codec knows the current iPad pointer position.
+At most 512 records, 10 seconds total waits and no unreleased buttons at batch end.
+Only one batch runs at a time. HTTP handling pauses while keys/buttons are held;
+stop is not instantaneous. Firmware stops on USB suspend/unmount or a 70-second
+deadline. Poll status until running:false and state:done; never retry uncertain input blindly.

@@ -150,12 +150,12 @@ const actionVariants = [
     additionalProperties: false,
     properties: {
       type: {const: 'click'},
-      x: {type: 'number', description: 'Optional screenshot x coordinate. Requires top-level pointer.'},
-      y: {type: 'number', description: 'Optional screenshot y coordinate. Requires top-level pointer.'},
+      x: {type: 'number', description: 'Screenshot x coordinate.'},
+      y: {type: 'number', description: 'Screenshot y coordinate.'},
       button: {type: 'string', enum: ['left', 'right', 'middle'], default: 'left'}
     },
-    required: ['type'],
-    description: 'Click the current pointer position, or move from top-level pointer to x/y then click.'
+    required: ['type','x','y'],
+    description: 'Click at screenshot coordinate x/y.'
   },
   {
     type: 'object',
@@ -166,18 +166,7 @@ const actionVariants = [
       y: {type: 'number'}
     },
     required: ['type', 'x', 'y'],
-    description: 'Move from top-level/current pointer to screenshot coordinate x/y. Requires top-level pointer for the first absolute pointer action.'
-  },
-  {
-    type: 'object',
-    additionalProperties: false,
-    properties: {
-      type: {const: 'move_by'},
-      dx: {type: 'integer', minimum: -4096, maximum: 4096},
-      dy: {type: 'integer', minimum: -4096, maximum: 4096}
-    },
-    required: ['type', 'dx', 'dy'],
-    description: 'Move by relative HID counts. Diagnostic use; prefer move_to after calibration.'
+    description: 'Move directly to screenshot coordinate x/y.'
   },
   {
     type: 'object',
@@ -189,7 +178,7 @@ const actionVariants = [
       button: {type: 'string', enum: ['left', 'right', 'middle'], default: 'left'}
     },
     required: ['type', 'from', 'to'],
-    description: 'Drag between two screenshot coordinates. Requires pointer calibration.'
+    description: 'Drag between two screenshot coordinates.'
   },
   {
     type: 'object',
@@ -217,10 +206,6 @@ const actionSchema = {
       },
       required: ['width', 'height']
     },
-    pointer: {
-      ...pointSchema,
-      description: 'Current known pointer position in coordinateSpace units. Required before the first absolute click or move_to because the hardware mouse only accepts relative movement.'
-    },
     delay: {type: 'integer', minimum: 0, maximum: 10},
     actions: {
       type: 'array',
@@ -236,7 +221,7 @@ const tools = [
   {
     name: 'status',
     title: 'iPad Control Status',
-    description: 'Return connection, session, calibration, and pending-command status for the iPad control server.',
+    description: 'Return connection, absolute-pointer capability, and pending-command status for the iPad control server.',
     inputSchema: {type: 'object', additionalProperties: false},
     annotations: {readOnlyHint: true}
   },
@@ -250,7 +235,7 @@ const tools = [
   {
     name: 'issue_actions',
     title: 'Issue iPad Input Actions',
-    description: 'Send ordered keyboard and pointer actions to the iPad. IMPORTANT: press.keys must be an object, for example {"key":"space","modifiers":["cmd"]}; never an array. Coordinates are in the latest screenshot coordinate space; absolute pointer actions require top-level pointer, for example {"coordinateSpace":{"width":1280,"height":960},"pointer":{"x":640,"y":480},"actions":[{"type":"click","x":500,"y":300}]}',
+    description: 'Send ordered keyboard and pointer actions to the iPad. press.keys must be an object, for example {"key":"space","modifiers":["cmd"]}; never an array. Coordinates use the latest screenshot coordinateSpace. Pointer positioning is absolute; provide coordinateSpace and target coordinates.',
     inputSchema: actionSchema,
     annotations: {readOnlyHint: false, destructiveHint: true}
   }
@@ -266,9 +251,9 @@ function initializeResult(requestedVersion) {
       'Use get_screen to inspect the current iPad screen.',
       'Use issue_actions to send short, ordered keyboard and pointer actions.',
       'For key chords, press.keys is an object: {"key":"space","modifiers":["cmd"]} sends Command-Space. Do not use arrays for press.keys.',
-      'Pointer actions use screenshot coordinates and require calibration in the iPad app.',
+      'Pointer actions use absolute screenshot coordinates; no starting pointer is needed.',
       'Scroll dy is raw wheel units, not pixels; the tested iPad scrolls down for positive values. Verify direction and movement with get_screen, since settings and the hovered pane affect the result.',
-      'Absolute click and move_to require top-level coordinateSpace and pointer because the hardware only supports relative mouse movement.'
+      'Coordinate click, move_to and drag require coordinateSpace dimensions from the latest full-screen screenshot.'
     ].join(' ')
   };
 }
